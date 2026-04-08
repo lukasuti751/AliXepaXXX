@@ -138,3 +138,73 @@ library XepaBytes {
         assembly {
             out := mload(add(add(b, 0x20), start))
         }
+    }
+
+    function toUint256(bytes memory b, uint256 start) internal pure returns (uint256 out) {
+        out = uint256(toBytes32(b, start));
+    }
+
+    function equal(bytes32 a, bytes32 c) internal pure returns (bool) {
+        return a == c;
+    }
+}
+
+/// @dev String tools tuned for compact metadata.
+library XepaStrings {
+    bytes16 private constant _HEX = 0x30313233343536373839616263646566;
+
+    function toHex(uint256 x, uint256 lenBytes) internal pure returns (string memory) {
+        uint256 len = lenBytes * 2;
+        bytes memory out = new bytes(2 + len);
+        out[0] = "0";
+        out[1] = "x";
+        for (uint256 i = 0; i < len; i++) {
+            uint8 v = uint8(x >> ((len - 1 - i) * 4)) & 0x0f;
+            out[2 + i] = bytes1(_HEX[v]);
+        }
+        return string(out);
+    }
+
+    function toDec(uint256 x) internal pure returns (string memory) {
+        if (x == 0) return "0";
+        uint256 y = x;
+        uint256 digits;
+        while (y != 0) {
+            digits++;
+            y /= 10;
+        }
+        bytes memory out = new bytes(digits);
+        while (x != 0) {
+            digits -= 1;
+            out[digits] = bytes1(uint8(48 + (x % 10)));
+            x /= 10;
+        }
+        return string(out);
+    }
+
+    function concat3(string memory a, string memory b, string memory c) internal pure returns (string memory) {
+        return string(abi.encodePacked(a, b, c));
+    }
+
+    function concat5(string memory a, string memory b, string memory c, string memory d, string memory e)
+        internal
+        pure
+        returns (string memory)
+    {
+        return string(abi.encodePacked(a, b, c, d, e));
+    }
+}
+
+/// @dev Signature verifier supporting EOAs and EIP-1271.
+library XepaSig {
+    using XepaAddress for address;
+
+    error XS_BadSig();
+    error XS_Expired();
+    error XS_BadV();
+
+    bytes4 internal constant _EIP1271_MAGIC = 0x1626ba7e;
+
+    function recover(bytes32 digest, bytes calldata sig) internal pure returns (address) {
+        if (sig.length != 65) revert XS_BadSig();
+        bytes32 r;
