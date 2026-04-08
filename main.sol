@@ -68,3 +68,73 @@ library XepaAddress {
         if (target == address(0)) revert XA_ZeroAddress();
         bool ok;
         assembly {
+            ok := staticcall(gas(), target, add(data, 0x20), mload(data), 0, 0)
+            let size := returndatasize()
+            ret := mload(0x40)
+            mstore(0x40, add(ret, add(size, 0x60)))
+            mstore(ret, size)
+            returndatacopy(add(ret, 0x20), 0, size)
+        }
+        if (!ok) revert XA_StaticFailed();
+    }
+}
+
+/// @dev Small math helpers with explicit error surface.
+library XepaMath {
+    error XM_Div0();
+    error XM_Range();
+
+    function min(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a < b ? a : b;
+    }
+
+    function max(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a > b ? a : b;
+    }
+
+    function clamp(uint256 x, uint256 lo, uint256 hi) internal pure returns (uint256) {
+        if (lo > hi) revert XM_Range();
+        if (x < lo) return lo;
+        if (x > hi) return hi;
+        return x;
+    }
+
+    function ceilDiv(uint256 a, uint256 b) internal pure returns (uint256) {
+        if (b == 0) revert XM_Div0();
+        unchecked {
+            return a == 0 ? 0 : ((a - 1) / b) + 1;
+        }
+    }
+
+    function satSub(uint256 a, uint256 b) internal pure returns (uint256) {
+        unchecked {
+            return a > b ? a - b : 0;
+        }
+    }
+
+    function absDiff(uint256 a, uint256 b) internal pure returns (uint256) {
+        return a >= b ? a - b : b - a;
+    }
+}
+
+/// @dev Bytes and packing helpers.
+library XepaBytes {
+    error XB_OOB();
+
+    function slice(bytes memory b, uint256 start, uint256 len) internal pure returns (bytes memory out) {
+        if (start + len > b.length) revert XB_OOB();
+        out = new bytes(len);
+        assembly {
+            let src := add(add(b, 0x20), start)
+            let dst := add(out, 0x20)
+            for { let i := 0 } lt(i, len) { i := add(i, 0x20) } {
+                mstore(add(dst, i), mload(add(src, i)))
+            }
+        }
+    }
+
+    function toBytes32(bytes memory b, uint256 start) internal pure returns (bytes32 out) {
+        if (start + 32 > b.length) revert XB_OOB();
+        assembly {
+            out := mload(add(add(b, 0x20), start))
+        }
