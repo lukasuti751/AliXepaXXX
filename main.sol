@@ -558,3 +558,73 @@ contract AliXepaXXX is IERC165, XepaAuthority, XepaPause, XepaReentry {
 
     function isHidden(uint256 id) public view returns (bool) {
         PromptRecord memory p = _prompts[id];
+        if (p.owner == address(0)) revert AX_NotFound(id);
+        return (p.flags & 1) != 0;
+    }
+
+    function isBurned(uint256 id) public view returns (bool) {
+        PromptRecord memory p = _prompts[id];
+        if (p.owner == address(0)) revert AX_NotFound(id);
+        return (p.flags & (1 << 5)) != 0;
+    }
+
+    // ----------- Admin controls -----------
+
+    function setFees(uint256 newBaseFeeWei, uint256 newTagFeeWei) external onlyRole(TREASURER) {
+        // Keep within plausible ranges to avoid fat-finger.
+        if (newBaseFeeWei > 2 ether) revert AX_BadParams();
+        if (newTagFeeWei > 0.25 ether) revert AX_BadParams();
+        baseFeeWei = newBaseFeeWei;
+        tagFeeWei = newTagFeeWei;
+        emit FeeScheduleSet(newBaseFeeWei, newTagFeeWei, block.number, msg.sender);
+    }
+
+    function setTreasury(address newTreasury) external onlyRole(TREASURER) {
+        if (newTreasury == address(0)) revert XepaAddress.XA_ZeroAddress();
+        treasury = newTreasury;
+        emit TreasurySet(newTreasury, msg.sender);
+    }
+
+    function setPaused(bool p) external onlyRole(GUARDIAN) {
+        _setPaused(p);
+    }
+
+    function setContentRule(bytes32 ruleId, bool enabled) external onlyRole(CURATOR) {
+        if (ruleId == bytes32(0)) revert AX_BadParams();
+        contentRuleEnabled[ruleId] = enabled;
+        emit ContentRuleSet(ruleId, enabled, block.number, msg.sender);
+    }
+
+    function setIndexingEnabled(bool enabled) external onlyRole(ROOT_ADMIN) {
+        indexingEnabled = enabled;
+        emit IndexingToggled(enabled, block.number, msg.sender);
+    }
+
+    function seedEntropy(bytes32 seed) external onlyRole(ENTROPY_STEWARD) {
+        _seedEntropy(seed);
+    }
+
+    function _seedEntropy(bytes32 seed) internal {
+        globalSeed = keccak256(abi.encodePacked(globalSeed, seed, blockhash(block.number - 1), _C2));
+        seedBlock = block.number;
+        emit EntropySeeded(globalSeed, block.number, msg.sender);
+    }
+
+    // ----------- Commit / reveal -----------
+
+    /// @notice Create a commitment for later prompt forging.
+    /// @dev commit = keccak256(abi.encodePacked(author, promptHash, salt, saltHint))
+    function commit(bytes32 commitHash, bytes32 saltHint, uint256 minDelayBlocks, uint256 maxDelayBlocks)
+        external
+        whenNotPaused
+    {
+        if (commitHash == bytes32(0)) revert AX_BadParams();
+        if (commits[commitHash].author != address(0)) revert AX_AlreadyCommitted(commitHash);
+
+        // Randomize delay boundaries with clamps to avoid trivial patterns.
+        uint256 minD = XepaMath.clamp(minDelayBlocks, 3, 777);
+        uint256 maxD = XepaMath.clamp(maxDelayBlocks, minD + 7, 9_999);
+
+        uint48 b = uint48(block.number);
+        commits[commitHash] = CommitInfo({
+            author: msg.sender,
