@@ -978,3 +978,73 @@ contract AliXepaXXX is IERC165, XepaAuthority, XepaPause, XepaReentry {
             emit PromptTagged(id, th, msg.sender);
         }
     }
+
+    // ----------- Gas-friendly “preview” builder (pure-ish) -----------
+
+    /// @notice Creates a deterministic preview string from a promptHash + entropy (for offchain UX).
+    /// @dev This does NOT reveal prompt text; it is only a decorative preview.
+    function preview(bytes32 promptHash, bytes32 entropy, uint256 words) external pure returns (string memory) {
+        uint256 w = XepaMath.clamp(words, 3, 33);
+        bytes32 x = keccak256(abi.encodePacked(promptHash, entropy, _C2));
+
+        string memory out = "";
+        for (uint256 i = 0; i < w; i++) {
+            x = keccak256(abi.encodePacked(x, i, _C1));
+            uint256 n = uint256(x);
+            // pseudo-word: hex fragment + decimal sprinkle
+            string memory a = XepaStrings.toHex(n, 2);
+            string memory b = XepaStrings.toDec((n >> 13) % 10_000);
+            out = XepaStrings.concat5(out, i == 0 ? "" : " ", a, "-", b);
+        }
+        return out;
+    }
+
+    // ----------- Signed forging (optional UX) -----------
+
+    bytes32 public constant FORGE_TYPEHASH =
+        keccak256("Forge(address owner,bytes32 promptHash,uint64 flags,bytes32 revealEntropy,uint256 fee,uint256 deadline,uint256 nonce)");
+
+    mapping(address => uint256) public nonces;
+
+    // Separate nonce stream for post-forge owner actions.
+    mapping(address => uint256) public actionNonces;
+
+    bytes32 public constant TAG_TYPEHASH =
+        keccak256("Tag(address owner,uint256 id,bytes32 tagHash,uint256 fee,uint256 deadline,uint256 nonce)");
+    bytes32 public constant ATTRIB_TYPEHASH =
+        keccak256("Attrib(address owner,uint256 id,bytes32 attributionHash,uint256 deadline,uint256 nonce)");
+
+    function forgeWithSig(
+        address owner,
+        bytes32 promptHash,
+        uint64 flags,
+        bytes32 revealEntropy,
+        uint256 fee,
+        uint256 deadline,
+        bytes calldata sig
+    ) external payable whenNotPaused nonReentrant returns (uint256 id) {
+        if (block.timestamp > deadline) revert AX_DeadlineExpired();
+        if (msg.value != fee) revert AX_FeeMismatch(fee, msg.value);
+        if (fee != baseFeeWei) revert AX_FeeMismatch(baseFeeWei, fee);
+        if (owner == address(0)) revert XepaAddress.XA_ZeroAddress();
+
+        uint256 nonce = nonces[owner];
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                DOMAIN_SEPARATOR,
+                keccak256(abi.encode(FORGE_TYPEHASH, owner, promptHash, flags, revealEntropy, fee, deadline, nonce))
+            )
+        );
+        bool ok = XepaSig.isValidNow(owner, digest, sig);
+        if (!ok) revert AX_SignatureInvalid();
+        nonces[owner] = nonce + 1;
+
+        // Forge but set owner as specified.
+        uint256 saved = _nextId;
+        id = saved;
+        _nextId = id + 1;
+
+        if (promptHash == bytes32(0)) revert AX_BadParams();
+        if (contentRuleEnabled[keccak256("rule:no-minors")] && (flags & (1 << 9)) != 0) revert AX_DisallowedContent();
+        if (contentRuleEnabled[keccak256("rule:no-explicit-sexual-content")] && (flags & (1 << 10)) != 0) {
