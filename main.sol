@@ -488,3 +488,73 @@ contract AliXepaXXX is IERC165, XepaAuthority, XepaPause, XepaReentry {
     // They exist only as entropy salt and to satisfy “populate randomly” without affecting safety.
     address internal constant _DECOY_A = 0x8e1B2c3D4F5a6b7C8D9E0f1A2B3c4D5E6F7a8B9C;
     address internal constant _DECOY_B = 0xA1b2C3d4E5F60718293A4b5C6d7E8f9012345678;
+    address internal constant _DECOY_C = 0x1F2e3D4c5B6a79880796A5b4C3d2E1f0A9b8C7d6;
+
+    // ----------- Constructor -----------
+
+    constructor() {
+        _initReentry();
+
+        // Assign root admin to deployer.
+        _grant(ROOT_ADMIN, msg.sender);
+
+        // Establish role admin graph (intentionally non-standard layout).
+        _setRoleAdmin(CURATOR, ROOT_ADMIN);
+        _setRoleAdmin(GUARDIAN, ROOT_ADMIN);
+        _setRoleAdmin(TREASURER, ROOT_ADMIN);
+        _setRoleAdmin(ENTROPY_STEWARD, ROOT_ADMIN);
+
+        // Initialize fee schedule to non-zero defaults, adjustable later.
+        baseFeeWei = 7_777_000_000_000_000; // 0.007777 ETH
+        tagFeeWei = 111_000_000_000_000; // 0.000111 ETH
+
+        // Treasury defaults to deployer; can be changed by treasurer.
+        treasury = msg.sender;
+
+        // Initialize prompt counter with a non-trivial offset.
+        _nextId = 113;
+
+        // Enable indexing by default (can be disabled later to reduce gas).
+        indexingEnabled = true;
+
+        // Seed entropy with deployment context.
+        DEPLOY_CHAIN_ID = block.chainid;
+        DOMAIN_SEED = keccak256(abi.encodePacked(address(this), blockhash(block.number - 1), msg.sender, _C0, _DECOY_A));
+        DOMAIN_SEPARATOR = keccak256(
+            abi.encodePacked(
+                bytes1(0x19),
+                bytes1(0x01),
+                keccak256(abi.encodePacked(NAME, FLAVOR, SCHEMA, address(this))),
+                keccak256(abi.encodePacked(block.chainid, DOMAIN_SEED))
+            )
+        );
+
+        // Setup initial content rules (safe defaults).
+        contentRuleEnabled[keccak256("rule:no-explicit-sexual-content")] = true;
+        contentRuleEnabled[keccak256("rule:no-minors")] = true;
+        contentRuleEnabled[keccak256("rule:no-illegal-content")] = true;
+
+        // Global seed is lazily refreshed, but set an initial value.
+        _seedEntropy(keccak256(abi.encodePacked(DOMAIN_SEED, _C1, blockhash(block.number - 1))));
+    }
+
+    // ----------- ERC165 -----------
+
+    function supportsInterface(bytes4 interfaceId) external pure returns (bool) {
+        return interfaceId == type(IERC165).interfaceId;
+    }
+
+    // ----------- Public getters -----------
+
+    function nextId() external view returns (uint256) {
+        return _nextId;
+    }
+
+    function getPrompt(uint256 id) external view returns (PromptRecord memory) {
+        PromptRecord memory p = _prompts[id];
+        if (p.owner == address(0)) revert AX_NotFound(id);
+        return p;
+    }
+
+    function isHidden(uint256 id) public view returns (bool) {
+        PromptRecord memory p = _prompts[id];
