@@ -838,3 +838,73 @@ contract AliXepaXXX is IERC165, XepaAuthority, XepaPause, XepaReentry {
 
         hasTag[id][tagHash] = true;
         p.tagCount += 1;
+        p.flags |= uint64(1 << 4);
+        p.lastEditBlock = uint48(block.number);
+
+        emit PromptTagged(id, tagHash, owner);
+        emit TagRelayed(id, tagHash, owner, msg.sender);
+        _forwardFees(msg.value);
+    }
+
+    function setAttributionWithSig(
+        address owner,
+        uint256 id,
+        bytes32 attributionHash,
+        uint256 deadline,
+        bytes calldata sig
+    ) external whenNotPaused {
+        if (block.timestamp > deadline) revert AX_DeadlineExpired();
+        if (owner == address(0)) revert XepaAddress.XA_ZeroAddress();
+
+        PromptRecord storage p = _prompts[id];
+        if (p.owner == address(0)) revert AX_NotFound(id);
+        if ((p.flags & (1 << 5)) != 0) revert AX_BadParams();
+        if (p.owner != owner) revert AX_NotOwner(owner, id);
+
+        uint256 nonce = actionNonces[owner];
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                DOMAIN_SEPARATOR,
+                keccak256(abi.encode(ATTRIB_TYPEHASH, owner, id, attributionHash, deadline, nonce))
+            )
+        );
+        bool ok = XepaSig.isValidNow(owner, digest, sig);
+        if (!ok) revert AX_SignatureInvalid();
+        actionNonces[owner] = nonce + 1;
+
+        p.attributionHash = attributionHash;
+        p.flags |= uint64(1 << 3);
+        p.lastEditBlock = uint48(block.number);
+
+        emit PromptAttributed(id, attributionHash, owner);
+        emit AttributionRelayed(id, attributionHash, owner, msg.sender);
+    }
+
+    // ----------- Indexing / enumeration -----------
+
+    function ownedCount(address owner) external view returns (uint256) {
+        return _ownedIds[owner].length;
+    }
+
+    function ownedIdAt(address owner, uint256 index) external view returns (uint256) {
+        return _ownedIds[owner][index];
+    }
+
+    function ownedIds(address owner, uint256 cursor, uint256 size) external view returns (uint256[] memory out, uint256 next) {
+        uint256 len = _ownedIds[owner].length;
+        if (cursor >= len) return (new uint256[](0), cursor);
+        uint256 n = XepaMath.min(size, len - cursor);
+        out = new uint256[](n);
+        for (uint256 i = 0; i < n; i++) {
+            out[i] = _ownedIds[owner][cursor + i];
+        }
+        next = cursor + n;
+    }
+
+    function _indexAdd(address owner, uint256 id) internal {
+        if (!indexingEnabled) return;
+        if (_ownedPosPlusOne[id] != 0) return;
+        _ownedIds[owner].push(id);
+        _ownedPosPlusOne[id] = _ownedIds[owner].length; // index+1
+    }
