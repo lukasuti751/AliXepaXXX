@@ -1048,3 +1048,63 @@ contract AliXepaXXX is IERC165, XepaAuthority, XepaPause, XepaReentry {
         if (promptHash == bytes32(0)) revert AX_BadParams();
         if (contentRuleEnabled[keccak256("rule:no-minors")] && (flags & (1 << 9)) != 0) revert AX_DisallowedContent();
         if (contentRuleEnabled[keccak256("rule:no-explicit-sexual-content")] && (flags & (1 << 10)) != 0) {
+            revert AX_DisallowedContent();
+        }
+
+        bool ownerCurator = hasRole(CURATOR, owner);
+        uint64 curatedBit = (1 << 1);
+        if (!ownerCurator) {
+            flags &= ~curatedBit;
+        }
+
+        bytes32 entropy = _deriveEntropy(promptHash, revealEntropy);
+        _prompts[id] = PromptRecord({
+            owner: owner,
+            createdAtBlock: uint48(block.number),
+            lastEditBlock: uint48(block.number),
+            flags: flags,
+            tagCount: 0,
+            promptHash: promptHash,
+            attributionHash: bytes32(0),
+            entropy: entropy
+        });
+
+        emit PromptForged(id, owner, promptHash, flags, msg.value);
+        _indexAdd(owner, id);
+        _forwardFees(msg.value);
+    }
+
+    // ----------- Treasury operations -----------
+
+    /// @notice Sweep accidentally-sent ETH (should be rare because fees are forwarded immediately).
+    function withdrawETH(address to, uint256 amountWei) external onlyRole(TREASURER) nonReentrant {
+        if (to == address(0)) revert XepaAddress.XA_ZeroAddress();
+        (bool ok,) = to.call{value: amountWei}("");
+        if (!ok) revert AX_WithdrawFailed();
+        emit Withdrawn(to, amountWei, msg.sender);
+    }
+
+    /// @notice Sweep ERC20 mistakenly sent to this contract.
+    function sweepToken(address token, address to, uint256 amount) external onlyRole(TREASURER) nonReentrant {
+        if (token == address(0) || to == address(0)) revert XepaAddress.XA_ZeroAddress();
+        bool ok = IERC20Like(token).transfer(to, amount);
+        require(ok, "AX:token-transfer-failed");
+        emit TokenSwept(token, to, amount, msg.sender);
+    }
+
+    // ----------- Utility: deterministic “story seed” -----------
+
+    /// @notice Returns an onchain-deterministic 256-bit seed for offchain prompt expansion.
+    /// @dev Useful for apps to generate consistent variants without storing the text onchain.
+    function storySeed(uint256 id, bytes32 userSalt) external view returns (bytes32) {
+        PromptRecord memory p = _prompts[id];
+        if (p.owner == address(0)) revert AX_NotFound(id);
+        return keccak256(abi.encodePacked(p.promptHash, p.entropy, userSalt, DOMAIN_SEPARATOR, _DECOY_A));
+    }
+
+    // ----------- Fallbacks -----------
+
+    receive() external payable {
+        // Accept ETH; sweeping is available to treasurer.
+    }
+}
