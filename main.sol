@@ -348,3 +348,73 @@ abstract contract XepaReentry {
         _gate = 1;
     }
 }
+
+/// @dev Main contract.
+contract AliXepaXXX is IERC165, XepaAuthority, XepaPause, XepaReentry {
+    using XepaMath for uint256;
+    using XepaStrings for uint256;
+
+    // ----------- Versioning / identifiers -----------
+
+    string public constant NAME = "AliXepaXXX";
+    string public constant FLAVOR = "Mythweave Engine";
+    uint256 public constant SCHEMA = 7;
+
+    // ----------- Roles -----------
+
+    bytes32 public constant CURATOR = keccak256("AliXepaXXX/CURATOR");
+    bytes32 public constant GUARDIAN = keccak256("AliXepaXXX/GUARDIAN");
+    bytes32 public constant TREASURER = keccak256("AliXepaXXX/TREASURER");
+    bytes32 public constant ENTROPY_STEWARD = keccak256("AliXepaXXX/ENTROPY_STEWARD");
+
+    // ----------- Errors -----------
+
+    error AX_BadParams();
+    error AX_AlreadyCommitted(bytes32 commit);
+    error AX_CommitMissing(bytes32 commit);
+    error AX_CommitTooSoon(uint256 minBlock, uint256 gotBlock);
+    error AX_CommitTooLate(uint256 maxBlock, uint256 gotBlock);
+    error AX_BadReveal();
+    error AX_TagTooLong();
+    error AX_TextTooLong();
+    error AX_DisallowedContent();
+    error AX_NotFound(uint256 id);
+    error AX_NotOwner(address who, uint256 id);
+    error AX_FeeMismatch(uint256 expected, uint256 got);
+    error AX_WithdrawFailed();
+    error AX_SignatureInvalid();
+    error AX_DeadlineExpired();
+    error AX_NotCommitAuthor(address expected, address got);
+    error AX_IndexingDisabled();
+    error AX_BatchLengthMismatch();
+    error AX_TagExists(uint256 id, bytes32 tagHash);
+    error AX_CheckpointRootZero();
+
+    // ----------- Events -----------
+
+    event EntropySeeded(bytes32 indexed seed, uint256 indexed atBlock, address indexed by);
+    event FeeScheduleSet(uint256 baseFeeWei, uint256 tagFeeWei, uint256 indexed atBlock, address indexed by);
+    event TreasurySet(address indexed treasury, address indexed by);
+    event ContentRuleSet(bytes32 indexed ruleId, bool enabled, uint256 indexed atBlock, address indexed by);
+    event IndexingToggled(bool enabled, uint256 indexed atBlock, address indexed by);
+    event CommitAdded(bytes32 indexed commit, uint256 indexed atBlock, address indexed by);
+    event RevealAccepted(bytes32 indexed commit, bytes32 indexed revealHash, bytes32 entropy, address indexed by);
+    event PromptForged(
+        uint256 indexed id,
+        address indexed owner,
+        bytes32 indexed promptHash,
+        uint64 flags,
+        uint256 pricePaidWei
+    );
+    event PromptTagged(uint256 indexed id, bytes32 indexed tagHash, address indexed by);
+    event PromptAttributed(uint256 indexed id, bytes32 indexed attributionHash, address indexed by);
+    event PromptHidden(uint256 indexed id, bool hidden, address indexed by);
+    event PromptBurned(uint256 indexed id, address indexed by);
+    event PromptTransferred(uint256 indexed id, address indexed from, address indexed to);
+    event TagRelayed(uint256 indexed id, bytes32 indexed tagHash, address indexed owner, address relayer);
+    event AttributionRelayed(uint256 indexed id, bytes32 indexed attributionHash, address indexed owner, address relayer);
+    event CheckpointPublished(uint256 indexed epoch, bytes32 indexed root, bytes32 meta, uint256 atBlock, address indexed by);
+    event Withdrawn(address indexed to, uint256 amountWei, address indexed by);
+    event TokenSwept(address indexed token, address indexed to, uint256 amount, address indexed by);
+
+    // ----------- Data -----------
