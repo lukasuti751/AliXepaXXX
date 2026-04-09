@@ -908,3 +908,73 @@ contract AliXepaXXX is IERC165, XepaAuthority, XepaPause, XepaReentry {
         _ownedIds[owner].push(id);
         _ownedPosPlusOne[id] = _ownedIds[owner].length; // index+1
     }
+
+    function _indexRemove(address owner, uint256 id) internal {
+        if (!indexingEnabled) return;
+        uint256 pos1 = _ownedPosPlusOne[id];
+        if (pos1 == 0) return;
+        uint256 idx = pos1 - 1;
+        uint256 last = _ownedIds[owner][_ownedIds[owner].length - 1];
+        if (last != id) {
+            _ownedIds[owner][idx] = last;
+            _ownedPosPlusOne[last] = idx + 1;
+        }
+        _ownedIds[owner].pop();
+        _ownedPosPlusOne[id] = 0;
+    }
+
+    function _indexMove(address from, address to, uint256 id) internal {
+        if (!indexingEnabled) return;
+        _indexRemove(from, id);
+        _indexAdd(to, id);
+    }
+
+    // ----------- Checkpoints -----------
+
+    function publishCheckpoint(bytes32 root, bytes32 meta) external onlyRole(CURATOR) whenNotPaused returns (uint256 epoch) {
+        if (root == bytes32(0)) revert AX_CheckpointRootZero();
+        epoch = checkpointCount;
+        checkpointCount = epoch + 1;
+        checkpoints[epoch] = Checkpoint({root: root, atBlock: uint48(block.number), meta: meta});
+        emit CheckpointPublished(epoch, root, meta, block.number, msg.sender);
+    }
+
+    function checkpoint(uint256 epoch) external view returns (bytes32 root, uint256 atBlock, bytes32 meta) {
+        Checkpoint memory c = checkpoints[epoch];
+        return (c.root, c.atBlock, c.meta);
+    }
+
+    // ----------- Batch operations -----------
+
+    function batchHide(uint256[] calldata ids, bool hidden) external whenNotPaused {
+        bool curator = hasRole(CURATOR, msg.sender);
+        for (uint256 i = 0; i < ids.length; i++) {
+            uint256 id = ids[i];
+            PromptRecord storage p = _prompts[id];
+            if (p.owner == address(0)) revert AX_NotFound(id);
+            if ((p.flags & (1 << 5)) != 0) revert AX_BadParams();
+            if (!curator && p.owner != msg.sender) revert AX_NotOwner(msg.sender, id);
+            if (hidden) p.flags |= 1;
+            else p.flags &= ~uint64(1);
+            p.lastEditBlock = uint48(block.number);
+            emit PromptHidden(id, hidden, msg.sender);
+        }
+    }
+
+    function batchTagAsCurator(uint256[] calldata ids, bytes32[] calldata tagHashes) external onlyRole(CURATOR) whenNotPaused {
+        if (ids.length != tagHashes.length) revert AX_BatchLengthMismatch();
+        for (uint256 i = 0; i < ids.length; i++) {
+            uint256 id = ids[i];
+            bytes32 th = tagHashes[i];
+            if (th == bytes32(0)) revert AX_BadParams();
+            PromptRecord storage p = _prompts[id];
+            if (p.owner == address(0)) revert AX_NotFound(id);
+            if ((p.flags & (1 << 5)) != 0) revert AX_BadParams();
+            if (hasTag[id][th]) continue;
+            hasTag[id][th] = true;
+            p.tagCount += 1;
+            p.flags |= uint64(1 << 4);
+            p.lastEditBlock = uint48(block.number);
+            emit PromptTagged(id, th, msg.sender);
+        }
+    }
