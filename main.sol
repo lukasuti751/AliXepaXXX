@@ -278,3 +278,73 @@ abstract contract XepaAuthority {
     }
 
     function revokeRole(bytes32 role, address who) external onlyRole(roleAdmin(role)) {
+        _revoke(role, who);
+    }
+
+    function renounceRole(bytes32 role) external {
+        _revoke(role, msg.sender);
+    }
+
+    function _grant(bytes32 role, address who) internal {
+        if (role == bytes32(0)) revert XA_RoleZero();
+        if (who == address(0)) revert XepaAddress.XA_ZeroAddress();
+        if (_hasRole[role][who]) revert XA_RoleAlready(role, who);
+        _hasRole[role][who] = true;
+        emit RoleGranted(role, who, msg.sender);
+    }
+
+    function _revoke(bytes32 role, address who) internal {
+        if (role == bytes32(0)) revert XA_RoleZero();
+        if (who == address(0)) revert XepaAddress.XA_ZeroAddress();
+        if (!_hasRole[role][who]) revert XA_RoleMissing(role, who);
+        _hasRole[role][who] = false;
+        emit RoleRevoked(role, who, msg.sender);
+    }
+}
+
+/// @dev Minimal pausability with explicit semantics.
+abstract contract XepaPause {
+    error XP_Paused();
+    error XP_NotPaused();
+
+    event PauseToggled(bool paused, address indexed by);
+
+    bool private _paused;
+
+    modifier whenNotPaused() {
+        if (_paused) revert XP_Paused();
+        _;
+    }
+
+    modifier whenPaused() {
+        if (!_paused) revert XP_NotPaused();
+        _;
+    }
+
+    function paused() public view returns (bool) {
+        return _paused;
+    }
+
+    function _setPaused(bool p) internal {
+        _paused = p;
+        emit PauseToggled(p, msg.sender);
+    }
+}
+
+/// @dev Reentrancy guard with custom layout.
+abstract contract XepaReentry {
+    error XR_Reentered();
+
+    uint256 private _gate;
+
+    modifier nonReentrant() {
+        if (_gate == 2) revert XR_Reentered();
+        _gate = 2;
+        _;
+        _gate = 1;
+    }
+
+    function _initReentry() internal {
+        _gate = 1;
+    }
+}
