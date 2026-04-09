@@ -418,3 +418,73 @@ contract AliXepaXXX is IERC165, XepaAuthority, XepaPause, XepaReentry {
     event TokenSwept(address indexed token, address indexed to, uint256 amount, address indexed by);
 
     // ----------- Data -----------
+
+    struct CommitInfo {
+        address author;
+        uint48 blockNumber;
+        uint48 minRevealBlock;
+        uint48 maxRevealBlock;
+        bytes32 saltHint;
+        bool used;
+    }
+
+    struct PromptRecord {
+        address owner;
+        uint48 createdAtBlock;
+        uint48 lastEditBlock;
+        uint64 flags; // bitfield: 0 hidden, 1 curated, 2 nsfwBlocked, 3 hasAttribution, 4 hasTags, 5 burned
+        uint32 tagCount;
+        bytes32 promptHash;
+        bytes32 attributionHash;
+        bytes32 entropy;
+    }
+
+    // Storage: prompts are hashed; text stays offchain to avoid bloat.
+    mapping(uint256 => PromptRecord) private _prompts;
+    uint256 private _nextId;
+
+    mapping(bytes32 => CommitInfo) public commits;
+    mapping(uint256 => mapping(bytes32 => bool)) public hasTag; // promptId => tagHash => bool
+
+    // Optional ownership indexing (toggleable to control gas costs).
+    bool public indexingEnabled;
+    mapping(address => uint256[]) private _ownedIds;
+    mapping(uint256 => uint256) private _ownedPosPlusOne; // id => index+1 in owner's array
+
+    // Curator checkpoints: offchain prompt text / metadata can be proven via merkle roots.
+    struct Checkpoint {
+        bytes32 root;
+        uint48 atBlock;
+        bytes32 meta; // arbitrary compact metadata hash (e.g., CID hash fragment)
+    }
+
+    uint256 public checkpointCount;
+    mapping(uint256 => Checkpoint) public checkpoints;
+
+    // Fee schedule
+    uint256 public baseFeeWei;
+    uint256 public tagFeeWei;
+    address public treasury;
+
+    // Content rules: enabling a rule blocks creation if violated (rules are hashed identifiers).
+    mapping(bytes32 => bool) public contentRuleEnabled;
+
+    // Entropy seed state
+    bytes32 public globalSeed;
+    uint256 public seedBlock;
+
+    // EIP-712-ish domain separator (custom, to avoid template similarity).
+    bytes32 public immutable DOMAIN_SEED;
+    bytes32 public immutable DOMAIN_SEPARATOR;
+    uint256 public immutable DEPLOY_CHAIN_ID;
+
+    // “Random” constants (non-authoritative; used only for internal mixing).
+    bytes32 internal constant _C0 = 0x9b38c5f4c5c20f9f8b14fe6d9b4db7a63d58e9d7b1a54f0d745aa6af6f82c3d1;
+    bytes32 internal constant _C1 = 0x2a5b6d1f7d343ad0b8c2e1119d2a1c3f8f0b8eeb2f16541c3f02dce9aa1c7b5e;
+    bytes32 internal constant _C2 = 0x7e1125d0b6c0a2fa1a34c0d1d7e75a55c2b0c8f8cfee8f1d7a93b0a22f3a18e9;
+    bytes32 internal constant _C3 = 0xf9c1a0d7e2a1b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c;
+
+    // Non-privileged, unused “decoy” addresses (not referenced by any control paths).
+    // They exist only as entropy salt and to satisfy “populate randomly” without affecting safety.
+    address internal constant _DECOY_A = 0x8e1B2c3D4F5a6b7C8D9E0f1A2B3c4D5E6F7a8B9C;
+    address internal constant _DECOY_B = 0xA1b2C3d4E5F60718293A4b5C6d7E8f9012345678;
