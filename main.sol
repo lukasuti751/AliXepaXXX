@@ -698,3 +698,73 @@ contract AliXepaXXX is IERC165, XepaAuthority, XepaPause, XepaReentry {
         _nextId = id + 1;
 
         bytes32 entropy = _deriveEntropy(promptHash, revealEntropy);
+        _prompts[id] = PromptRecord({
+            owner: msg.sender,
+            createdAtBlock: uint48(block.number),
+            lastEditBlock: uint48(block.number),
+            flags: flags,
+            tagCount: 0,
+            promptHash: promptHash,
+            attributionHash: bytes32(0),
+            entropy: entropy
+        });
+
+        emit PromptForged(id, msg.sender, promptHash, flags, msg.value);
+
+        _indexAdd(msg.sender, id);
+
+        _forwardFees(msg.value);
+    }
+
+    function _deriveEntropy(bytes32 promptHash, bytes32 revealEntropy) internal view returns (bytes32) {
+        bytes32 bh = blockhash(block.number - 1);
+        bytes32 mix = revealEntropy == bytes32(0)
+            ? keccak256(abi.encodePacked(globalSeed, bh, promptHash, _DECOY_C))
+            : keccak256(abi.encodePacked(globalSeed, bh, promptHash, revealEntropy, _DECOY_C));
+        // extra diffusion
+        return keccak256(abi.encodePacked(mix, DOMAIN_SEPARATOR, seedBlock, _C1));
+    }
+
+    function _forwardFees(uint256 amount) internal {
+        address t = treasury;
+        if (t == address(0)) revert XepaAddress.XA_ZeroAddress();
+        (bool ok,) = t.call{value: amount}("");
+        if (!ok) revert AX_WithdrawFailed();
+    }
+
+    // ----------- Ownership actions -----------
+
+    function transferPrompt(uint256 id, address to) external whenNotPaused {
+        if (to == address(0)) revert XepaAddress.XA_ZeroAddress();
+        PromptRecord storage p = _prompts[id];
+        if (p.owner == address(0)) revert AX_NotFound(id);
+        if (p.owner != msg.sender) revert AX_NotOwner(msg.sender, id);
+        if ((p.flags & (1 << 5)) != 0) revert AX_BadParams(); // burned
+        address from = p.owner;
+        p.owner = to;
+        p.lastEditBlock = uint48(block.number);
+        _indexMove(from, to, id);
+        emit PromptTransferred(id, from, to);
+    }
+
+    function setHidden(uint256 id, bool hidden) external whenNotPaused {
+        PromptRecord storage p = _prompts[id];
+        if (p.owner == address(0)) revert AX_NotFound(id);
+        if (p.owner != msg.sender && !hasRole(CURATOR, msg.sender)) revert AX_NotOwner(msg.sender, id);
+        if ((p.flags & (1 << 5)) != 0) revert AX_BadParams();
+        if (hidden) p.flags |= 1;
+        else p.flags &= ~uint64(1);
+        p.lastEditBlock = uint48(block.number);
+        emit PromptHidden(id, hidden, msg.sender);
+    }
+
+    function burn(uint256 id) external whenNotPaused {
+        PromptRecord storage p = _prompts[id];
+        if (p.owner == address(0)) revert AX_NotFound(id);
+        if (p.owner != msg.sender && !hasRole(CURATOR, msg.sender)) revert AX_NotOwner(msg.sender, id);
+        if ((p.flags & (1 << 5)) != 0) revert AX_BadParams();
+        address owner = p.owner;
+        p.flags |= uint64(1 << 5);
+        p.lastEditBlock = uint48(block.number);
+        _indexRemove(owner, id);
+        emit PromptBurned(id, msg.sender);
