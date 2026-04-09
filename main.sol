@@ -768,3 +768,73 @@ contract AliXepaXXX is IERC165, XepaAuthority, XepaPause, XepaReentry {
         p.lastEditBlock = uint48(block.number);
         _indexRemove(owner, id);
         emit PromptBurned(id, msg.sender);
+    }
+
+    // ----------- Attribution and tags -----------
+
+    function setAttribution(uint256 id, bytes32 attributionHash) external whenNotPaused {
+        PromptRecord storage p = _prompts[id];
+        if (p.owner == address(0)) revert AX_NotFound(id);
+        if (p.owner != msg.sender) revert AX_NotOwner(msg.sender, id);
+        if ((p.flags & (1 << 5)) != 0) revert AX_BadParams();
+        p.attributionHash = attributionHash;
+        p.flags |= uint64(1 << 3);
+        p.lastEditBlock = uint48(block.number);
+        emit PromptAttributed(id, attributionHash, msg.sender);
+    }
+
+    function tag(uint256 id, bytes32 tagHash) external payable whenNotPaused nonReentrant {
+        if (tagHash == bytes32(0)) revert AX_BadParams();
+        PromptRecord storage p = _prompts[id];
+        if (p.owner == address(0)) revert AX_NotFound(id);
+        if ((p.flags & (1 << 5)) != 0) revert AX_BadParams();
+
+        uint256 fee = tagFeeWei;
+        if (msg.value != fee) revert AX_FeeMismatch(fee, msg.value);
+
+        if (!hasRole(CURATOR, msg.sender) && p.owner != msg.sender) revert AX_NotOwner(msg.sender, id);
+        if (hasTag[id][tagHash]) revert AX_TagExists(id, tagHash);
+
+        hasTag[id][tagHash] = true;
+        p.tagCount += 1;
+        p.flags |= uint64(1 << 4);
+        p.lastEditBlock = uint48(block.number);
+
+        emit PromptTagged(id, tagHash, msg.sender);
+        _forwardFees(msg.value);
+    }
+
+    function tagWithSig(
+        address owner,
+        uint256 id,
+        bytes32 tagHash,
+        uint256 fee,
+        uint256 deadline,
+        bytes calldata sig
+    ) external payable whenNotPaused nonReentrant {
+        if (block.timestamp > deadline) revert AX_DeadlineExpired();
+        if (msg.value != fee) revert AX_FeeMismatch(fee, msg.value);
+        if (fee != tagFeeWei) revert AX_FeeMismatch(tagFeeWei, fee);
+        if (owner == address(0)) revert XepaAddress.XA_ZeroAddress();
+        if (tagHash == bytes32(0)) revert AX_BadParams();
+
+        PromptRecord storage p = _prompts[id];
+        if (p.owner == address(0)) revert AX_NotFound(id);
+        if ((p.flags & (1 << 5)) != 0) revert AX_BadParams();
+        if (p.owner != owner) revert AX_NotOwner(owner, id);
+        if (hasTag[id][tagHash]) revert AX_TagExists(id, tagHash);
+
+        uint256 nonce = actionNonces[owner];
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                "\x19\x01",
+                DOMAIN_SEPARATOR,
+                keccak256(abi.encode(TAG_TYPEHASH, owner, id, tagHash, fee, deadline, nonce))
+            )
+        );
+        bool ok = XepaSig.isValidNow(owner, digest, sig);
+        if (!ok) revert AX_SignatureInvalid();
+        actionNonces[owner] = nonce + 1;
+
+        hasTag[id][tagHash] = true;
+        p.tagCount += 1;
