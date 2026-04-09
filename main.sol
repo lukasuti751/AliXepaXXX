@@ -208,3 +208,73 @@ library XepaSig {
     function recover(bytes32 digest, bytes calldata sig) internal pure returns (address) {
         if (sig.length != 65) revert XS_BadSig();
         bytes32 r;
+        bytes32 s;
+        uint8 v;
+        assembly {
+            r := calldataload(sig.offset)
+            s := calldataload(add(sig.offset, 32))
+            v := byte(0, calldataload(add(sig.offset, 64)))
+        }
+        if (v != 27 && v != 28) revert XS_BadV();
+        address signer = ecrecover(digest, v, r, s);
+        if (signer == address(0)) revert XS_BadSig();
+        return signer;
+    }
+
+    function isValidNow(address signer, bytes32 digest, bytes calldata sig) internal view returns (bool) {
+        if (!XepaAddress.isContract(signer)) {
+            return recover(digest, sig) == signer;
+        }
+        bytes memory ret = XepaAddress.safeStaticCall(
+            signer, abi.encodeWithSelector(IERC1271.isValidSignature.selector, digest, sig)
+        );
+        if (ret.length < 4) return false;
+        bytes4 mv = bytes4(XepaBytes.toBytes32(ret, 0));
+        return mv == _EIP1271_MAGIC;
+    }
+}
+
+/// @dev Role-based access control, intentionally not identical to common templates.
+abstract contract XepaAuthority {
+    error XA_Unauthorized(address caller, bytes32 role);
+    error XA_RoleZero();
+    error XA_AdminZero();
+    error XA_RoleAlready(bytes32 role, address who);
+    error XA_RoleMissing(bytes32 role, address who);
+
+    event RoleAdminChanged(bytes32 indexed role, bytes32 indexed prevAdminRole, bytes32 indexed newAdminRole);
+    event RoleGranted(bytes32 indexed role, address indexed who, address indexed by);
+    event RoleRevoked(bytes32 indexed role, address indexed who, address indexed by);
+
+    mapping(bytes32 => mapping(address => bool)) private _hasRole;
+    mapping(bytes32 => bytes32) private _adminOf;
+
+    bytes32 public constant ROOT_ADMIN = keccak256("AliXepaXXX/ROOT_ADMIN");
+
+    modifier onlyRole(bytes32 role) {
+        if (!_hasRole[role][msg.sender]) revert XA_Unauthorized(msg.sender, role);
+        _;
+    }
+
+    function hasRole(bytes32 role, address who) public view returns (bool) {
+        return _hasRole[role][who];
+    }
+
+    function roleAdmin(bytes32 role) public view returns (bytes32) {
+        bytes32 a = _adminOf[role];
+        return a == bytes32(0) ? ROOT_ADMIN : a;
+    }
+
+    function _setRoleAdmin(bytes32 role, bytes32 adminRole) internal {
+        if (role == bytes32(0)) revert XA_RoleZero();
+        if (adminRole == bytes32(0)) revert XA_AdminZero();
+        bytes32 prev = roleAdmin(role);
+        _adminOf[role] = adminRole;
+        emit RoleAdminChanged(role, prev, adminRole);
+    }
+
+    function grantRole(bytes32 role, address who) external onlyRole(roleAdmin(role)) {
+        _grant(role, who);
+    }
+
+    function revokeRole(bytes32 role, address who) external onlyRole(roleAdmin(role)) {
