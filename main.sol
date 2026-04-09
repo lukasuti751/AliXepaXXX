@@ -628,3 +628,73 @@ contract AliXepaXXX is IERC165, XepaAuthority, XepaPause, XepaReentry {
         uint48 b = uint48(block.number);
         commits[commitHash] = CommitInfo({
             author: msg.sender,
+            blockNumber: b,
+            minRevealBlock: uint48(uint256(b) + minD),
+            maxRevealBlock: uint48(uint256(b) + maxD),
+            saltHint: saltHint,
+            used: false
+        });
+
+        emit CommitAdded(commitHash, block.number, msg.sender);
+    }
+
+    /// @notice Reveal and accept entropy tied to a prior commitment.
+    function reveal(bytes32 commitHash, bytes32 promptHash, bytes32 salt) external whenNotPaused returns (bytes32 entropy) {
+        CommitInfo storage c = commits[commitHash];
+        if (c.author == address(0)) revert AX_CommitMissing(commitHash);
+        if (c.used) revert AX_AlreadyCommitted(commitHash);
+        if (c.author != msg.sender) revert AX_NotCommitAuthor(c.author, msg.sender);
+
+        uint256 bn = block.number;
+        if (bn < c.minRevealBlock) revert AX_CommitTooSoon(c.minRevealBlock, bn);
+        if (bn > c.maxRevealBlock) revert AX_CommitTooLate(c.maxRevealBlock, bn);
+
+        bytes32 check = keccak256(abi.encodePacked(msg.sender, promptHash, salt, c.saltHint));
+        if (check != commitHash) revert AX_BadReveal();
+
+        // Mix multiple sources to avoid single-point reliance.
+        bytes32 bh = blockhash(block.number - 1);
+        bytes32 bh2 = blockhash(block.number - 17);
+        entropy = keccak256(
+            abi.encodePacked(globalSeed, bh, bh2, commitHash, promptHash, salt, _C3, _DECOY_B, address(this))
+        );
+
+        c.used = true;
+        emit RevealAccepted(commitHash, keccak256(abi.encodePacked(promptHash, salt)), entropy, msg.sender);
+    }
+
+    // ----------- Forging prompts (hash-only onchain) -----------
+
+    /// @notice Forge a prompt record from an offchain prompt (provided as hash).
+    /// @param promptHash keccak256(promptTextBytes)
+    /// @param flags initial flags (only curator can set curated bit at creation)
+    /// @param revealEntropy optional entropy; if 0, uses global entropy mix
+    function forge(bytes32 promptHash, uint64 flags, bytes32 revealEntropy)
+        external
+        payable
+        whenNotPaused
+        nonReentrant
+        returns (uint256 id)
+    {
+        if (promptHash == bytes32(0)) revert AX_BadParams();
+
+        uint256 fee = baseFeeWei;
+        if (msg.value != fee) revert AX_FeeMismatch(fee, msg.value);
+
+        // Enforce content safety via rule IDs (promptHash is not inspectable, so rules are asserted by caller).
+        // This contract does not store text; apps are expected to enforce rules offchain.
+        if (contentRuleEnabled[keccak256("rule:no-minors")] && (flags & (1 << 9)) != 0) revert AX_DisallowedContent();
+        if (contentRuleEnabled[keccak256("rule:no-explicit-sexual-content")] && (flags & (1 << 10)) != 0) {
+            revert AX_DisallowedContent();
+        }
+
+        bool callerCurator = hasRole(CURATOR, msg.sender);
+        uint64 curatedBit = (1 << 1);
+        if (!callerCurator) {
+            flags &= ~curatedBit;
+        }
+
+        id = _nextId;
+        _nextId = id + 1;
+
+        bytes32 entropy = _deriveEntropy(promptHash, revealEntropy);
